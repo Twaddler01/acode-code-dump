@@ -13,6 +13,7 @@ class AcodePlugin {
     selectedFolder = null;
     scannedFiles = [];
     binaryFiles = [];
+    generatedDump = "";
     firstFileContent = null;
 
     selectedPaths = new Set();
@@ -169,6 +170,43 @@ class AcodePlugin {
             </section>
             <h3>Selected Files — Debug</h3>
             <pre id="selection-debug">No files selected.</pre>
+
+            <section class="code-dump__section">
+                <h2>Generate Dump</h2>
+            
+                <p id="dump-status">
+                    Select files above, then generate a dump.
+                </p>
+            
+                <button
+                    id="generate-dump"
+                    class="code-dump__button"
+                    type="button"
+                >
+                    Generate Dump
+                </button>
+            
+                <label class="code-dump__field" for="dump-output">
+                    Combined Text Output
+                </label>
+            
+                <textarea
+                    id="dump-output"
+                    class="code-dump__output"
+                    readonly
+                    spellcheck="false"
+                    placeholder="Your combined dump will appear here."
+                ></textarea>
+            
+                <button
+                    id="copy-dump"
+                    class="code-dump__button"
+                    type="button"
+                    disabled
+                >
+                    Copy Dump
+                </button>
+            </section>
         `;
 
         this.style = document.createElement("style");
@@ -311,6 +349,25 @@ class AcodePlugin {
                 font-size: 12px;
                 user-select: text;
             }
+            .code-dump__output {
+                box-sizing: border-box;
+                display: block;
+                width: 100%;
+                min-height: 320px;
+                margin-top: 8px;
+                padding: 12px;
+                border: 1px solid var(--border-color, #414754);
+                border-radius: 8px;
+                background: #10141d;
+                color: #d7e1ee;
+                font-family: monospace;
+                font-size: 12px;
+                line-height: 1.5;
+                white-space: pre;
+                overflow: auto;
+                resize: vertical;
+                user-select: text;
+            }
         `;
 
         this.page.body.replaceChildren(this.style, content);
@@ -323,6 +380,16 @@ class AcodePlugin {
 
         content.querySelector("#scan-folder").addEventListener("click", () => {
             this.scanFolder();
+        });
+
+        content
+            .querySelector("#generate-dump")
+            .addEventListener("click", () => {
+                this.generateDump();
+            });
+
+        content.querySelector("#copy-dump").addEventListener("click", () => {
+            this.copyDump();
         });
 
         const allExtensions = content.querySelector("#all-extensions");
@@ -645,10 +712,7 @@ class AcodePlugin {
 
                     if (!textFile) {
                         binaryFiles.push(record);
-                    } else if (
-                        includeAllExtensions ||
-                        matchesExtension(name)
-                    ) {
+                    } else if (includeAllExtensions || matchesExtension(name)) {
                         files.push(record);
                     }
                 } catch (error) {
@@ -771,33 +835,141 @@ class AcodePlugin {
         }
     }
 
-    destroy() {
-        if (this.page) {
-            this.page.off("hide", this.handlePageHide);
+    async generateDump() {
+        const body = this.page?.body;
+        const status = body?.querySelector("#dump-status");
+        const output = body?.querySelector("#dump-output");
+        const generateButton = body?.querySelector("#generate-dump");
+        const copyButton = body?.querySelector("#copy-dump");
 
-            if (this.page.isConnected) {
-                this.page.hide();
-            }
-
-            this.page.body?.replaceChildren();
-            this.page.classList.remove("code-dump-page");
+        if (!status || !output || !generateButton || !copyButton) {
+            return;
         }
 
-        this.launcherInstalled = false;
-        this.launcherReady = false;
-        this.launcherSelected = false;
+        const selectedFiles = this.scannedFiles
+            .filter(file => this.selectedPaths.has(file.path))
+            .sort((a, b) => a.path.localeCompare(b.path));
 
-        this.sidebarApps?.remove(plugin.id);
-        this.commands?.removeCommand?.("code-dump-open");
+        if (selectedFiles.length === 0) {
+            status.textContent = "Select at least one text file first.";
+            return;
+        }
 
-        this.style?.remove();
+        // Guardrails for the first implementation.
+        const MAX_FILE_BYTES = 2 * 1024 * 1024;
+        const MAX_DUMP_CHARS = 10 * 1024 * 1024;
 
-        this.page = null;
-        this.sidebarApps = null;
-        this.fileBrowser = null;
-        this.commands = null;
-        this.fs = null;
-        this.style = null;
+        generateButton.disabled = true;
+        copyButton.disabled = true;
+        output.value = "";
+        this.generatedDump = "";
+
+        status.textContent = `Reading ${selectedFiles.length} selected file(s)...`;
+
+        const chunks = [
+            "CODE DUMP",
+            `Project: ${this.selectedFolder?.name || "Unknown"}`,
+            `Files selected: ${selectedFiles.length}`,
+            "=".repeat(40),
+            ""
+        ];
+
+        let filesAdded = 0;
+        let filesFailed = 0;
+        let filesSkipped = 0;
+        let totalChars = chunks.join("\n").length;
+
+        try {
+            for (const item of selectedFiles) {
+                try {
+                    if (item.size > MAX_FILE_BYTES) {
+                        filesSkipped++;
+                        chunks.push(
+                            `===== SKIPPED FILE: ${item.path} =====`,
+                            "",
+                            `Reason: File exceeds the ${MAX_FILE_BYTES} byte limit.`,
+                            "",
+                            "===== END FILE =====",
+                            ""
+                        );
+                        continue;
+                    }
+
+                    const file = await this.fs(item.url);
+                    const content = await file.readFile("utf-8");
+
+                    if (typeof content !== "string") {
+                        throw new Error("File did not return text.");
+                    }
+
+                    const section = [
+                        `===== FILE: ${item.path} =====`,
+                        "",
+                        content,
+                        "",
+                        "===== END FILE =====",
+                        ""
+                    ].join("\n");
+
+                    if (totalChars + section.length > MAX_DUMP_CHARS) {
+                        filesSkipped++;
+                        chunks.push(
+                            `===== SKIPPED FILE: ${item.path} =====`,
+                            "",
+                            "Reason: Combined dump size limit reached.",
+                            "",
+                            "===== END FILE =====",
+                            ""
+                        );
+
+                        // Avoid adding more content after reaching the limit.
+                        break;
+                    }
+
+                    chunks.push(section);
+                    totalChars += section.length;
+                    filesAdded++;
+                } catch (error) {
+                    filesFailed++;
+
+                    chunks.push(
+                        `===== ERROR: ${item.path} =====`,
+                        "",
+                        `Could not read file: ${error?.message || error}`,
+                        "",
+                        "===== END FILE =====",
+                        ""
+                    );
+                }
+            }
+
+            chunks.push("=".repeat(40), "END CODE DUMP");
+
+            this.generatedDump = chunks.join("\n");
+            output.value = this.generatedDump;
+
+            copyButton.disabled = !this.generatedDump;
+
+            status.textContent =
+                `Dump generated: ${filesAdded} file(s) included; ` +
+                `${filesFailed} read error(s); ` +
+                `${filesSkipped} skipped. ` +
+                `${this.generatedDump.length.toLocaleString()} characters.`;
+
+            console.log("[Code Dump] Dump generated", {
+                selected: selectedFiles.length,
+                filesAdded,
+                filesFailed,
+                filesSkipped,
+                characters: this.generatedDump.length
+            });
+        } catch (error) {
+            status.textContent = `Dump generation failed: ${error?.message || error}`;
+
+            console.error("[Code Dump] Dump generation failed:", error);
+        } finally {
+            generateButton.disabled = false;
+        }
     }
 
     renderFileTree() {
@@ -1026,6 +1198,96 @@ class AcodePlugin {
             : "No files selected.";
 
         console.log("[Code Dump] Selected files:", selected);
+    }
+
+    async copyDump() {
+        const body = this.page?.body;
+        const status = body?.querySelector("#dump-status");
+        const output = body?.querySelector("#dump-output");
+
+        if (!this.generatedDump) {
+            if (status) status.textContent = "Generate a dump first.";
+            return;
+        }
+
+        // First attempt: modern Clipboard API.
+        try {
+            if (navigator.clipboard?.writeText) {
+                await navigator.clipboard.writeText(this.generatedDump);
+
+                if (status) {
+                    status.textContent = "Dump copied to clipboard.";
+                }
+
+                return;
+            }
+        } catch (error) {
+            console.warn(
+                "[Code Dump] Clipboard API unavailable; trying fallback.",
+                error
+            );
+        }
+
+        // Fallback: legacy copy command, useful in embedded WebViews.
+        try {
+            if (!output) throw new Error("Dump output is unavailable.");
+
+            output.focus();
+            output.select();
+            output.setSelectionRange(0, output.value.length);
+
+            const copied = document.execCommand("copy");
+
+            if (copied) {
+                if (status) {
+                    status.textContent = "Dump copied to clipboard.";
+                }
+                return;
+            }
+        } catch (error) {
+            console.warn("[Code Dump] Legacy copy failed:", error);
+        }
+
+        // Final fallback: leave the text selected for manual copying.
+        if (output) {
+            output.focus();
+            output.select();
+            output.setSelectionRange(0, output.value.length);
+        }
+
+        if (status) {
+            status.textContent =
+                "Automatic copying failed. The dump is selected; use Copy from your device's text menu.";
+        }
+    }
+
+    destroy() {
+        if (this.page) {
+            this.page.off("hide", this.handlePageHide);
+
+            if (this.page.isConnected) {
+                this.page.hide();
+            }
+
+            this.page.body?.replaceChildren();
+            this.page.classList.remove("code-dump-page");
+        }
+
+        this.launcherInstalled = false;
+        this.launcherReady = false;
+        this.launcherSelected = false;
+
+        this.sidebarApps?.remove(plugin.id);
+        this.commands?.removeCommand?.("code-dump-open");
+
+        this.style?.remove();
+
+        this.page = null;
+        this.sidebarApps = null;
+        this.fileBrowser = null;
+        this.commands = null;
+        this.fs = null;
+        this.style = null;
     }
 }
 
