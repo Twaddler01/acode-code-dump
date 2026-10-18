@@ -14,7 +14,6 @@ class AcodePlugin {
     scannedFiles = [];
     binaryFiles = [];
     generatedDump = "";
-    firstFileContent = null;
 
     selectedPaths = new Set();
 
@@ -69,7 +68,7 @@ class AcodePlugin {
 
         content.innerHTML = `
             <header class="code-dump__header">
-                <h1>Code Dump mod.2</h1>
+                <h1>Code Dump</h1>
                 <p>
                     Collect project source files into one text file.
                 </p>
@@ -165,12 +164,12 @@ class AcodePlugin {
                     class="code-dump__results"
                 >No scan results yet.</pre>
                 
-                <h3>First Text File — Content Test</h3>
-                <pre id="file-preview">Scan a folder to preview its first text file.</pre>
             </section>
-            <h3>Selected Files — Debug</h3>
-            <pre id="selection-debug">No files selected.</pre>
-
+            <section class="code-dump__section">
+                <h3>Selected Files</h3>
+    
+                <pre id="selected-files">No files selected.</pre>
+            </section>
             <section class="code-dump__section">
                 <h2>Generate Dump</h2>
             
@@ -182,6 +181,7 @@ class AcodePlugin {
                     id="generate-dump"
                     class="code-dump__button"
                     type="button"
+                    disabled
                 >
                     Generate Dump
                 </button>
@@ -227,6 +227,9 @@ class AcodePlugin {
                 >
                     Save Dump
                 </button>
+                <p id="dump-save-status">
+                Not saved yet.
+                </p>
 
             </section>
         `;
@@ -358,18 +361,6 @@ class AcodePlugin {
             
             .code-dump__field input:disabled {
                 opacity: 0.45;
-            }
-            #file-preview {
-                white-space: pre-wrap;
-                overflow-wrap: anywhere;
-                overflow: auto;
-                max-height: 320px;
-                padding: 12px;
-                border-radius: 8px;
-                background: #10141d;
-                color: #d7e1ee;
-                font-size: 12px;
-                user-select: text;
             }
             .code-dump__output {
                 box-sizing: border-box;
@@ -567,7 +558,6 @@ class AcodePlugin {
         const body = this.page?.body;
         const status = body?.querySelector("#scan-status");
         const results = body?.querySelector("#scan-results");
-        const preview = body?.querySelector("#file-preview");
         const scanButton = body?.querySelector("#scan-folder");
 
         if (!status || !results || !scanButton) return;
@@ -616,17 +606,13 @@ class AcodePlugin {
 
         // Safety limits for the initial integration.
         const MAX_DETECT_BYTES = 10 * 1024 * 1024;
-        const MAX_PREVIEW_BYTES = 1024 * 1024;
-        const MAX_PREVIEW_CHARS = 50000;
 
         scanButton.disabled = true;
         status.textContent = "Scanning and detecting file types...";
         results.textContent = "";
-        if (preview) preview.textContent = "Checking the first text file...";
 
         this.scannedFiles = [];
         this.binaryFiles = [];
-        this.firstFileContent = null;
 
         const getName = entry => {
             if (entry.name) return entry.name;
@@ -782,58 +768,7 @@ class AcodePlugin {
             this.selectedPaths.clear();
 
             this.renderFileTree();
-            this.updateSelectionDebug();
-
-            // TEST: read only the first detected text file.
-            // The full contents are retained for further integration testing.
-            const firstFile = this.scannedFiles[0];
-
-            if (firstFile) {
-                try {
-                    if (firstFile.size > MAX_PREVIEW_BYTES) {
-                        if (preview) {
-                            preview.textContent =
-                                `Preview skipped: ${firstFile.path} is ` +
-                                `${firstFile.size} bytes. ` +
-                                "The preview limit is 1 MiB.";
-                        }
-                    } else {
-                        const file = await this.fs(firstFile.url);
-                        const content = await file.readFile("utf-8");
-
-                        if (typeof content !== "string") {
-                            throw new Error("UTF-8 read did not return text");
-                        }
-
-                        this.firstFileContent = content;
-
-                        if (preview) {
-                            preview.textContent =
-                                content.length > MAX_PREVIEW_CHARS
-                                    ? content.slice(0, MAX_PREVIEW_CHARS) +
-                                      "\n\n--- Preview truncated ---"
-                                    : content;
-                        }
-
-                        console.log(
-                            "[Code Dump] First text file content loaded",
-                            {
-                                path: firstFile.path,
-                                size: firstFile.size,
-                                characters: content.length
-                            }
-                        );
-                    }
-                } catch (error) {
-                    const message = error?.message || String(error);
-
-                    if (preview) {
-                        preview.textContent = `Could not preview ${firstFile.path}:\n${message}`;
-                    }
-                }
-            } else if (preview) {
-                preview.textContent = "No text files available to preview.";
-            }
+            this.updateSelectedFiles();
 
             status.textContent =
                 `Scanned ${foldersScanned} folder(s); ` +
@@ -885,10 +820,10 @@ class AcodePlugin {
         const MAX_FILE_BYTES = 2 * 1024 * 1024;
         const MAX_DUMP_CHARS = 10 * 1024 * 1024;
 
-        generateButton.disabled = true;
         copyButton.disabled = true;
         output.value = "";
         this.generatedDump = "";
+        generateButton.disabled = true;
 
         const saveButton = body?.querySelector("#save-dump");
         if (saveButton) saveButton.disabled = true;
@@ -998,7 +933,7 @@ class AcodePlugin {
 
             console.error("[Code Dump] Dump generation failed:", error);
         } finally {
-            generateButton.disabled = false;
+            this.updateGenerateButton();
         }
     }
 
@@ -1108,7 +1043,7 @@ class AcodePlugin {
                 this.selectedPaths = new Set(checked ? allPaths : []);
 
                 this.renderFileTree();
-                this.updateSelectionDebug();
+                this.updateSelectedFiles();
             }
         );
 
@@ -1163,7 +1098,7 @@ class AcodePlugin {
                 }
 
                 this.renderFileTree();
-                this.updateSelectionDebug();
+                this.updateSelectedFiles();
             });
 
             const folderLabel = document.createElement("strong");
@@ -1197,7 +1132,7 @@ class AcodePlugin {
                         }
 
                         this.renderFileTree();
-                        this.updateSelectionDebug();
+                        this.updateSelectedFiles();
                     },
                     isBinary
                 );
@@ -1214,8 +1149,8 @@ class AcodePlugin {
         renderFolder(root, treeContainer, true);
     }
 
-    updateSelectionDebug() {
-        const output = this.page?.body?.querySelector("#selection-debug");
+    updateSelectedFiles() {
+        const output = this.page?.body?.querySelector("#selected-files");
 
         if (!output) return;
 
@@ -1226,6 +1161,8 @@ class AcodePlugin {
         output.textContent = selected.length
             ? selected.join("\n")
             : "No files selected.";
+
+        this.updateGenerateButton();
 
         console.log("[Code Dump] Selected files:", selected);
     }
@@ -1293,7 +1230,7 @@ class AcodePlugin {
 
     async saveDump() {
         const body = this.page?.body;
-        const status = body?.querySelector("#dump-status");
+        const status = body?.querySelector("#dump-save-status");
         const filenameInput = body?.querySelector("#dump-filename");
         const saveButton = body?.querySelector("#save-dump");
 
@@ -1389,6 +1326,14 @@ class AcodePlugin {
         } finally {
             saveButton.disabled = false;
         }
+    }
+
+    updateGenerateButton() {
+        const button = this.page?.body.querySelector("#generate-dump");
+
+        if (!button) return;
+
+        button.disabled = this.selectedPaths.size === 0;
     }
 
     destroy() {

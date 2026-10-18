@@ -10,11 +10,11 @@ A simple Acode plugin for collecting project source files into a single text fil
 
 ## Getting Started
 
-1. Install Code Dump in Acode.
+1. Install Code Dump in Acode. Add from within Acode (local): plugin.zip.
 2. Open Code Dump using its sidebar icon.
 3. Select the project folder you want to work with.
 
-## Planned Features
+## Features
 
 - Recursive folder scanning.
 - Configurable file extensions.
