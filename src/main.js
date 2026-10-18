@@ -206,6 +206,28 @@ class AcodePlugin {
                 >
                     Copy Dump
                 </button>
+
+                <label class="code-dump__field" for="dump-filename">
+                    Save filename
+                    <input
+                        id="dump-filename"
+                        type="text"
+                        value="code-dump.txt"
+                        placeholder="code-dump.txt"
+                        autocomplete="off"
+                        spellcheck="false"
+                    />
+                </label>
+                
+                <button
+                    id="save-dump"
+                    class="code-dump__button"
+                    type="button"
+                    disabled
+                >
+                    Save Dump
+                </button>
+
             </section>
         `;
 
@@ -390,6 +412,10 @@ class AcodePlugin {
 
         content.querySelector("#copy-dump").addEventListener("click", () => {
             this.copyDump();
+        });
+
+        content.querySelector("#save-dump").addEventListener("click", () => {
+            this.saveDump();
         });
 
         const allExtensions = content.querySelector("#all-extensions");
@@ -864,6 +890,9 @@ class AcodePlugin {
         output.value = "";
         this.generatedDump = "";
 
+        const saveButton = body?.querySelector("#save-dump");
+        if (saveButton) saveButton.disabled = true;
+
         status.textContent = `Reading ${selectedFiles.length} selected file(s)...`;
 
         const chunks = [
@@ -948,7 +977,8 @@ class AcodePlugin {
             this.generatedDump = chunks.join("\n");
             output.value = this.generatedDump;
 
-            copyButton.disabled = !this.generatedDump;
+            const saveButton = body.querySelector("#save-dump");
+            if (saveButton) saveButton.disabled = !this.generatedDump;
 
             status.textContent =
                 `Dump generated: ${filesAdded} file(s) included; ` +
@@ -1258,6 +1288,106 @@ class AcodePlugin {
         if (status) {
             status.textContent =
                 "Automatic copying failed. The dump is selected; use Copy from your device's text menu.";
+        }
+    }
+
+    async saveDump() {
+        const body = this.page?.body;
+        const status = body?.querySelector("#dump-status");
+        const filenameInput = body?.querySelector("#dump-filename");
+        const saveButton = body?.querySelector("#save-dump");
+
+        if (!status || !filenameInput || !saveButton) return;
+
+        if (!this.generatedDump) {
+            status.textContent = "Generate a dump first.";
+            return;
+        }
+
+        if (!this.selectedFolder?.url) {
+            status.textContent = "Select a project folder first.";
+            return;
+        }
+
+        let filename = filenameInput.value.trim();
+
+        if (!filename) {
+            status.textContent = "Enter a filename.";
+            return;
+        }
+
+        if (
+            filename === "." ||
+            filename === ".." ||
+            /[/\\:*?"<>|]/.test(filename)
+        ) {
+            status.textContent = "Enter a valid filename.";
+            return;
+        }
+
+        if (!/\.[^./\\]+$/.test(filename)) {
+            filename += ".txt";
+        }
+
+        saveButton.disabled = true;
+        status.textContent = `Saving ${filename}...`;
+
+        try {
+            const folder = await this.fs(this.selectedFolder.url);
+
+            // Find the file using Acode's directory listing.
+            const entries = await folder.lsDir();
+            const existing = entries.find(
+                entry => entry.name === filename && entry.isFile
+            );
+
+            // Reuse an existing file, or create it if it doesn't exist.
+            const file = existing
+                ? await this.fs(existing.url)
+                : await folder.createFile(filename);
+
+            console.log("[Code Dump] Write method:", typeof file.writeFile);
+            console.log(
+                "[Code Dump] Dump length before write:",
+                this.generatedDump.length
+            );
+
+            if (typeof file.writeFile !== "function") {
+                throw new Error("The selected file has no writeFile() method.");
+            }
+
+            const writeResult = await file.writeFile(this.generatedDump);
+
+            console.log("[Code Dump] writeFile() result:", writeResult);
+
+            // Verify that the saved file contains the expected content.
+            const savedContent = await file.readFile("utf-8");
+
+            if (typeof savedContent !== "string") {
+                throw new Error(
+                    "The file was written, but readFile('utf-8') did not return text."
+                );
+            }
+
+            if (savedContent !== this.generatedDump) {
+                throw new Error(
+                    `Content verification failed. Expected ${this.generatedDump.length} characters, read back ${savedContent.length}.`
+                );
+            }
+
+            status.textContent = `Saved and verified ${filename} (${savedContent.length.toLocaleString()} characters).`;
+
+            console.log("[Code Dump] Save verified", {
+                filename,
+                characters: savedContent.length,
+                url: existing?.url || "Created in selected folder"
+            });
+        } catch (error) {
+            status.textContent = `Save failed: ${error?.message || error}`;
+
+            console.error("[Code Dump] Save failed:", error);
+        } finally {
+            saveButton.disabled = false;
         }
     }
 
