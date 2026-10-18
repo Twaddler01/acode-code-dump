@@ -4,6 +4,7 @@ import { isText } from "istextorbinary";
 class AcodePlugin {
     baseUrl = "";
     page = null;
+    sidebarIconClass = "code-dump-icon";
 
     sidebarApps = null;
     fileBrowser = null;
@@ -55,9 +56,91 @@ class AcodePlugin {
         this.createPage();
         this.page.on("hide", this.handlePageHide);
 
+        this.registerSidebarIcon();
         this.registerLauncher();
         this.registerCommand();
     }
+
+    
+registerSidebarIcon() {
+    const svg = `
+        <svg xmlns="http://www.w3.org/2000/svg"
+             viewBox="0 0 24 24">
+            <path
+                fill="none"
+                stroke="#33b5e5"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M8 4H4v16h16V8l-4-4H8z"/>
+            <path
+                fill="none"
+                stroke="#33b5e5"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M14 4v5h5
+                   M9 12l-2 2 2 2
+                   m6-4 2 2-2 2
+                   m-2-5-2 6"/>
+        </svg>
+    `;
+
+    const svgUrl =
+        `data:image/svg+xml,${encodeURIComponent(svg)}`;
+
+    acode.addIcon(this.sidebarIconClass, svgUrl);
+}
+
+    
+    /*
+    registerSidebarIcon() {
+        const svg = `
+        <svg xmlns="http://www.w3.org/2000/svg"
+             viewBox="0 0 24 24">
+            <path
+                fill="none"
+                stroke="#33b5e5"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M8 4H4v16h16V8l-4-4H8z"/>
+            <path
+                fill="none"
+                stroke="#33b5e5"
+                stroke-width="1.8"
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                d="M14 4v5h5
+                   M9 12l-2 2 2 2
+                   m6-4 2 2-2 2
+                   m-2-5-2 6"/>
+        </svg>
+    `;
+
+        const svgUrl = `url("data:image/svg+xml,${encodeURIComponent(svg)}")`;
+
+        const style = document.createElement("style");
+
+        style.dataset.plugin = plugin.id;
+
+        style.textContent = `
+            .code-dump-icon {
+                display: inline-block;
+                width: 24px;
+                height: 24px;
+                background-color: transparent;
+                background-image: ${svgUrl};
+                background-repeat: no-repeat;
+                background-position: center;
+                background-size: contain;
+            }
+        `;
+
+        document.head.appendChild(style);
+        this.sidebarIconStyle = style;
+    }
+    */
 
     createPage() {
         this.page.classList.add("code-dump-page");
@@ -458,7 +541,7 @@ class AcodePlugin {
         this.selectedDuringInstall = false;
 
         this.sidebarApps.add(
-            "code",
+            this.sidebarIconClass,
             plugin.id,
             "Code Dump",
             () => {},
@@ -1356,6 +1439,8 @@ class AcodePlugin {
         this.commands?.removeCommand?.("code-dump-open");
 
         this.style?.remove();
+        this.sidebarIconStyle?.remove();
+        this.sidebarIconStyle = null;
 
         this.page = null;
         this.sidebarApps = null;
